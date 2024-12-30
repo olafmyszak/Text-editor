@@ -79,7 +79,7 @@ ErrorType renderBuffer(const std::vector<std::string> &buffer)
 	return ErrorType::None;
 }
 
-ErrorType redrawLine(const int row, const std::string &text, const int consoleWidth = 120)
+ErrorType redrawLine(const int row, const int col, const std::string &text, const int consoleWidth = 120)
 {
 	// Hide cursor to prevent flickering
 	CONSOLE_CURSOR_INFO cursorInfo;
@@ -92,7 +92,6 @@ ErrorType redrawLine(const int row, const std::string &text, const int consoleWi
 	{
 		return ErrorType::GetConsoleCursorInfoError;
 	}
-
 
 	// Position cursor in the beginning of the line
 	COORD pos = {0, static_cast<SHORT>(row)};
@@ -114,7 +113,8 @@ ErrorType redrawLine(const int row, const std::string &text, const int consoleWi
 	WriteConsole(hConsole, text.c_str(), text.size(), &written, nullptr);
 
 	// Set cursor position to the end of text
-	pos.X = static_cast<SHORT>(text.length());
+	// pos.X = static_cast<SHORT>(text.length());
+	pos.X = static_cast<SHORT>(col);
 	if (!SetConsoleCursorPosition(hConsole, pos))
 	{
 		return ErrorType::SetConsoleCursorPositionError;
@@ -128,6 +128,19 @@ ErrorType redrawLine(const int row, const std::string &text, const int consoleWi
 	}
 
 	return ErrorType::None;
+}
+
+void logBufferToDebugOutput(const std::vector<std::string> &buffer)
+{
+	std::string message = "\n------------------\n";
+
+	for (const auto &line : buffer)
+	{
+		message += line;
+		message += "\n";
+	}
+
+	OutputDebugStringA(message.c_str());
 }
 
 int main()
@@ -155,21 +168,20 @@ int main()
 	}
 
 	// std::vector<std::string> buffer = {"Welcome to My Text Editor!", "Press ESC to exit."};
-	std::vector<std::string> buffer;
-
-	// renderBuffer(buffer);
+	std::vector<std::string> buffer{1};
 
 	// Input loop
 	INPUT_RECORD inputRecord;
 	DWORD nrOfEventsRead;
 
-	std::string line;
-	SHORT row = 0, col = 0;
+	int row = 0, col = 0, maxRow = 0;
 
 	while (true)
 	{
+		std::string &current_line = buffer.at(row);
+
 		// Draw line
-		if (const ErrorType error = redrawLine(row, line); error != ErrorType::None)
+		if (const ErrorType error = redrawLine(row, col, current_line); error != ErrorType::None)
 		{
 			std::cerr << error << '\n';
 			restoreConsole();
@@ -189,45 +201,103 @@ int main()
 		{
 			const auto key_code = inputRecord.Event.KeyEvent.wVirtualKeyCode;
 
-			// ESC key
 			if (key_code == VK_ESCAPE)
 			{
 				break;
 			}
 
-			// Enter key
-			if (key_code == VK_RETURN)
+			if (key_code == VK_UP)
 			{
-				buffer.push_back(line);
-				line.clear();
-				++row;
-			}
-			// Backspace
-			else if (key_code == VK_BACK)
-			{
-				if (!line.empty())
-				{
-					line.pop_back();
-
-					if (col > 0)
-					{
-						--col;
-					}
-				}
-				else if (row > 0)
+				if (row > 0)
 				{
 					--row;
 				}
+				col = 0;
 			}
-			// 0 - 9 and A - Z keys
-			else if ((key_code >= 0x30 && key_code <= 0x39) || (key_code >= 0x41 && key_code <= 0x5A))
+			else if (key_code == VK_DOWN)
 			{
-				line += inputRecord.Event.KeyEvent.uChar.AsciiChar;
+				if (row < maxRow)
+				{
+					++row;
+				}
+				col = 0;
+			}
+			else if (key_code == VK_LEFT)
+			{
+				if (col > 0)
+				{
+					--col;
+				}
+			}
+			else if (key_code == VK_RIGHT)
+			{
+				if (col < current_line.length())
+				{
+					++col;
+				}
+			}
+			else if (key_code == VK_RETURN)
+			{
+				++row;
+				++maxRow;
+
+				col = 0;
+
+				// If we're at the last line, add an empty line to the end
+				if (row == maxRow)
+				{
+					buffer.emplace_back();
+				}
+				else
+				{
+					// Insert a new line in the middle and redraw everything below that line
+					buffer.emplace(buffer.begin() + row);
+
+					for (int i = 0; i < buffer.size(); ++i)
+					{
+						const auto &line = buffer[i];
+						redrawLine(i, line.length(), line);
+					}
+				}
+			}
+			else if (key_code == VK_BACK)
+			{
+				if (!current_line.empty())
+				{
+					if (col > 0)
+					{
+						current_line.erase(col - 1, 1);
+						--col;
+					}
+					else if (row > 0)
+					{
+						--row;
+					}
+				}
+				// If line is empty, delete it from buffer and redraw
+				else if (row > 0)
+				{
+					buffer.erase(buffer.begin() + row);
+					--row;
+
+					system("cls");
+					renderBuffer(buffer);
+				}
+			}
+			// 0 - 9, a-z, spacebar, miscellaneous characters
+			else if ((key_code >= 0x30 && key_code <= 0x39) || (key_code >= 0x41 && key_code <= 0x5A) || key_code ==
+				VK_SPACE || (key_code >= 0xBA && key_code <= 0xC0) || (key_code >= 0xDB && key_code <= 0xDF) || key_code
+				== 0xE2)
+			{
+				// Insert a new character after cursor
+				// current_line += inputRecord.Event.KeyEvent.uChar.AsciiChar;
+				current_line.insert(col, 1, inputRecord.Event.KeyEvent.uChar.AsciiChar);
 				++col;
 			}
 		}
 	}
 
 	restoreConsole();
+
 	return 0;
 }
