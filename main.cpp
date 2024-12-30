@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 #include <windows.h>
 #include <vector>
 
@@ -35,6 +36,13 @@ std::ostream &operator<<(std::ostream &os, const ErrorType errorType)
 	}
 
 	return os;
+}
+
+std::string coordToString(const COORD coord)
+{
+	std::ostringstream oss;
+	oss << "{" << coord.X << ", " << coord.Y << "}";
+	return oss.str();
 }
 
 ErrorType setupConsole()
@@ -79,9 +87,8 @@ ErrorType renderBuffer(const std::vector<std::string> &buffer)
 	return ErrorType::None;
 }
 
-ErrorType redrawLine(const int row, const int col, const std::string &text, const int consoleWidth = 120)
+ErrorType hideCursor()
 {
-	// Hide cursor to prevent flickering
 	CONSOLE_CURSOR_INFO cursorInfo;
 	if (!GetConsoleCursorInfo(hConsole, &cursorInfo))
 	{
@@ -92,10 +99,28 @@ ErrorType redrawLine(const int row, const int col, const std::string &text, cons
 	{
 		return ErrorType::GetConsoleCursorInfoError;
 	}
+	return ErrorType::None;
+}
 
+ErrorType showCursor()
+{
+	CONSOLE_CURSOR_INFO cursorInfo;
+	if (!GetConsoleCursorInfo(hConsole, &cursorInfo))
+	{
+		return ErrorType::GetConsoleCursorInfoError;
+	}
+	cursorInfo.bVisible = true;
+	if (!SetConsoleCursorInfo(hConsole, &cursorInfo))
+	{
+		return ErrorType::GetConsoleCursorInfoError;
+	}
+	return ErrorType::None;
+}
+
+ErrorType clearLine(const int row, const int consoleWidth)
+{
 	// Position cursor in the beginning of the line
-	COORD pos = {0, static_cast<SHORT>(row)};
-	if (!SetConsoleCursorPosition(hConsole, pos))
+	if (COORD pos = {0, static_cast<SHORT>(row)}; !SetConsoleCursorPosition(hConsole, pos))
 	{
 		return ErrorType::SetConsoleCursorPositionError;
 	}
@@ -105,26 +130,61 @@ ErrorType redrawLine(const int row, const int col, const std::string &text, cons
 	DWORD written;
 	WriteConsole(hConsole, spaces.c_str(), spaces.size(), &written, nullptr);
 
+	return ErrorType::None;
+}
+
+ErrorType writeLine(const int row, const std::string &text, const int col = -1)
+{
+	COORD pos = {0, static_cast<SHORT>(row)};
 	// Reset cursor to the beginning and write new line of text
 	if (!SetConsoleCursorPosition(hConsole, pos))
 	{
 		return ErrorType::SetConsoleCursorPositionError;
 	}
+
+	DWORD written;
 	WriteConsole(hConsole, text.c_str(), text.size(), &written, nullptr);
 
 	// Set cursor position to the end of text
-	// pos.X = static_cast<SHORT>(text.length());
-	pos.X = static_cast<SHORT>(col);
+	if (col == -1)
+	{
+		pos.X = static_cast<SHORT>(text.length());
+	}
+	// or specifc column
+	else
+	{
+		pos.X = static_cast<SHORT>(col);
+	}
+
 	if (!SetConsoleCursorPosition(hConsole, pos))
 	{
 		return ErrorType::SetConsoleCursorPositionError;
 	}
 
-	// Show cursor to prevent flickering
-	cursorInfo.bVisible = true;
-	if (!SetConsoleCursorInfo(hConsole, &cursorInfo))
+	return ErrorType::None;
+}
+
+ErrorType redrawLine(const int row, const std::string &text, const int consoleWidth, const int col = -1)
+{
+	// Hide cursor to prevent flickering
+	if (const ErrorType error = hideCursor(); error != ErrorType::None)
 	{
-		return ErrorType::GetConsoleCursorInfoError;
+		return error;
+	}
+
+	if (const ErrorType error = clearLine(row, consoleWidth); error != ErrorType::None)
+	{
+		return error;
+	}
+
+	if (const ErrorType error = writeLine(row, text, col); error != ErrorType::None)
+	{
+		return error;
+	}
+
+	if (const ErrorType error = showCursor(); error != ErrorType::None)
+	{
+		return error;
 	}
 
 	return ErrorType::None;
@@ -160,6 +220,10 @@ int main()
 		return static_cast<int>(ErrorType::GetStdHandleError);
 	}
 
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+	GetConsoleScreenBufferInfo(hConsole, &csbi);
+	const int consoleWidth = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+
 	if (const ErrorType error = setupConsole(); error != ErrorType::None)
 	{
 		std::cerr << error << '\n';
@@ -181,7 +245,7 @@ int main()
 		std::string &current_line = buffer.at(row);
 
 		// Draw line
-		if (const ErrorType error = redrawLine(row, col, current_line); error != ErrorType::None)
+		if (const ErrorType error = redrawLine(row, current_line, consoleWidth, col); error != ErrorType::None)
 		{
 			std::cerr << error << '\n';
 			restoreConsole();
@@ -211,16 +275,16 @@ int main()
 				if (row > 0)
 				{
 					--row;
+					col = buffer[row].length();
 				}
-				col = 0;
 			}
 			else if (key_code == VK_DOWN)
 			{
 				if (row < maxRow)
 				{
 					++row;
+					col = buffer[row].length();
 				}
-				col = 0;
 			}
 			else if (key_code == VK_LEFT)
 			{
@@ -253,10 +317,10 @@ int main()
 					// Insert a new line in the middle and redraw everything below that line
 					buffer.emplace(buffer.begin() + row);
 
-					for (int i = 0; i < buffer.size(); ++i)
+					for (int i = row; i <= maxRow; ++i)
 					{
 						const auto &line = buffer[i];
-						redrawLine(i, line.length(), line);
+						redrawLine(i, line, consoleWidth);
 					}
 				}
 			}
@@ -279,9 +343,19 @@ int main()
 				{
 					buffer.erase(buffer.begin() + row);
 					--row;
+					--maxRow;
 
-					system("cls");
-					renderBuffer(buffer);
+					// Redraw lines after the deleted one
+					for (int i = row; i <= maxRow; ++i)
+					{
+						const auto &line = buffer[i];
+						redrawLine(i, line, consoleWidth);
+					}
+
+					// and clear the last one
+					clearLine(maxRow + 1, consoleWidth);
+
+					col = buffer[row].length();
 				}
 			}
 			// 0 - 9, a-z, spacebar, miscellaneous characters
