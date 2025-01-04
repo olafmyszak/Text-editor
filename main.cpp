@@ -1,5 +1,6 @@
 #include <iostream>
 #include <sstream>
+#include <unordered_set>
 #include <windows.h>
 #include <vector>
 
@@ -203,6 +204,17 @@ void logBufferToDebugOutput(const std::vector<std::string> &buffer)
 	OutputDebugStringA(message.c_str());
 }
 
+const std::unordered_set printableKeyCodes = {
+	VK_SPACE, 0xE2, // Individual keys
+	// Numeric keys
+	0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+	// Alphabetic keys
+	0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52, 0x53,
+	0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A,
+	// Special keys
+	0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF
+};
+
 int main()
 {
 	hStdin = GetStdHandle(STD_INPUT_HANDLE);
@@ -275,7 +287,7 @@ int main()
 				if (row > 0)
 				{
 					--row;
-					col = buffer[row].length();
+					col = static_cast<int>(buffer[row].length());
 				}
 			}
 			else if (key_code == VK_DOWN)
@@ -283,7 +295,7 @@ int main()
 				if (row < maxRow)
 				{
 					++row;
-					col = buffer[row].length();
+					col = static_cast<int>(buffer[row].length());
 				}
 			}
 			else if (key_code == VK_LEFT)
@@ -326,42 +338,39 @@ int main()
 			}
 			else if (key_code == VK_BACK)
 			{
-				if (!current_line.empty())
+				// If cursor is in the beginning of line, merge upper and current line and move the rest one line up
+				if (col == 0)
 				{
-					if (col > 0)
+					if (row > 0)
 					{
-						current_line.erase(col - 1, 1);
-						--col;
-					}
-					else if (row > 0)
-					{
+						auto old_upper_line_length = buffer[row - 1].length();
+						buffer[row - 1] += current_line;
+
+						buffer.erase(buffer.begin() + row);
 						--row;
+						--maxRow;
+
+						// Redraw lines after the deleted one
+						for (int i = row; i <= maxRow; ++i)
+						{
+							const auto &line = buffer[i];
+							redrawLine(i, line, consoleWidth);
+						}
+
+						// and clear the last one
+						clearLine(maxRow + 1, consoleWidth);
+
+						// Move the cursor to the end of upper line before merging
+						col = static_cast<int>(old_upper_line_length);
 					}
 				}
-				// If line is empty, delete it from buffer and redraw
-				else if (row > 0)
+				else
 				{
-					buffer.erase(buffer.begin() + row);
-					--row;
-					--maxRow;
-
-					// Redraw lines after the deleted one
-					for (int i = row; i <= maxRow; ++i)
-					{
-						const auto &line = buffer[i];
-						redrawLine(i, line, consoleWidth);
-					}
-
-					// and clear the last one
-					clearLine(maxRow + 1, consoleWidth);
-
-					col = buffer[row].length();
+					current_line.erase(col - 1, 1);
+					--col;
 				}
 			}
-			// 0 - 9, a-z, spacebar, miscellaneous characters
-			else if ((key_code >= 0x30 && key_code <= 0x39) || (key_code >= 0x41 && key_code <= 0x5A) || key_code ==
-				VK_SPACE || (key_code >= 0xBA && key_code <= 0xC0) || (key_code >= 0xDB && key_code <= 0xDF) || key_code
-				== 0xE2)
+			else if (printableKeyCodes.contains(key_code))
 			{
 				// Insert a new character after cursor
 				// current_line += inputRecord.Event.KeyEvent.uChar.AsciiChar;
