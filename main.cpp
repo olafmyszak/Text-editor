@@ -317,24 +317,35 @@ int main()
 				++row;
 				++maxRow;
 
-				col = 0;
-
-				// If we're at the last line, add an empty line to the end
-				if (row == maxRow)
+				// If the cursor is in the middle of a line, split the line at the cursor position and move the text after the cursor to a new line below
+				if (col < current_line.length())
 				{
-					buffer.emplace_back();
+					const std::string firstPart = current_line.substr(0, col);
+					const std::string secondPart = current_line.substr(col);
+
+					buffer[row - 1] = firstPart;
+					buffer.insert(buffer.begin() + row, secondPart);
 				}
 				else
 				{
-					// Insert a new line in the middle and redraw everything below that line
-					buffer.emplace(buffer.begin() + row);
-
-					for (int i = row; i <= maxRow; ++i)
+					if (row == maxRow)
 					{
-						const auto &line = buffer[i];
-						redrawLine(i, line, consoleWidth);
+						buffer.emplace_back();
+					}
+					else
+					{
+						buffer.emplace(buffer.begin() + row);
 					}
 				}
+
+				// Redraw modified lines
+				for (int i = row - 1; i <= maxRow; ++i)
+				{
+					const auto &line = buffer[i];
+					redrawLine(i, line, consoleWidth);
+				}
+
+				col = 0;
 			}
 			else if (key_code == VK_BACK)
 			{
