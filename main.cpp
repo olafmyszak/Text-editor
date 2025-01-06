@@ -381,6 +381,16 @@ int main()
 					--col;
 				}
 			}
+			else if (key_code == VK_TAB)
+			{
+				// Insert 4 spaces
+				current_line.insert(col, "    ");
+
+
+				col += 4;
+
+				redrawLine(row, current_line, consoleWidth, col);
+			}
 			else if (printableKeyCodes.contains(key_code))
 			{
 				// Insert a new character after cursor
