@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -156,7 +157,7 @@ ErrorType writeLine(const int row, const std::string &text, const int col = -1)
 	{
 		pos.X = static_cast<SHORT>(text.length());
 	}
-	// or specifc column
+	// or specific column
 	else
 	{
 		pos.X = static_cast<SHORT>(col);
@@ -242,6 +243,28 @@ ErrorType readFile(const std::string &path, std::vector<std::string> &buffer)
 	return ErrorType::None;
 }
 
+ErrorType readFile(const std::filesystem::path &path, std::vector<std::string> &buffer)
+{
+	std::ifstream inf{path};
+
+	if (!inf)
+	{
+		return ErrorType::FileOpenError;
+	}
+
+	std::vector<std::string> tmp_buffer;
+
+	std::string line;
+	while (std::getline(inf, line))
+	{
+		tmp_buffer.push_back(line);
+	}
+
+	buffer = tmp_buffer;
+
+	return ErrorType::None;
+}
+
 ErrorType saveFile(const std::string &path, const std::vector<std::string> &buffer)
 {
 	std::ofstream outf{path};
@@ -251,7 +274,7 @@ ErrorType saveFile(const std::string &path, const std::vector<std::string> &buff
 		return ErrorType::FileOpenError;
 	}
 
-	for (const auto& line : buffer)
+	for (const auto &line : buffer)
 	{
 		outf << line << '\n';
 	}
@@ -259,18 +282,63 @@ ErrorType saveFile(const std::string &path, const std::vector<std::string> &buff
 	return ErrorType::None;
 }
 
+ErrorType saveFile(const std::filesystem::path &path, const std::vector<std::string> &buffer)
+{
+	std::ofstream outf{path};
+
+	if (!outf)
+	{
+		return ErrorType::FileOpenError;
+	}
+
+	for (const auto &line : buffer)
+	{
+		outf << line << '\n';
+	}
+
+	return ErrorType::None;
+}
+
+bool askForConfirmation(const std::string &message)
+{
+	std::string input;
+	while (true)
+	{
+		std::cout << message << " (y/n): ";
+		std::getline(std::cin, input);
+
+		// Convert input to lowercase for case-insensitivity
+		if (!input.empty())
+		{
+			const char response = static_cast<char>(std::tolower(input[0]));
+
+			if (response == 'y')
+			{
+				return true;
+			}
+
+			if (response == 'n')
+			{
+				return false;
+			}
+		}
+
+		// If input is invalid, prompt again
+		std::cout << "Invalid input. Please enter 'y' for yes or 'n' for no.\n";
+	}
+}
+
 int main(int argc, char *argv[])
 {
 	if (argc > 2)
 	{
-		std::cout << "Usage: " << argv[0] << " [path/to/file]\n";
+		std::cout << "Usage: " << argv[0] << " [file]\n";
 		return static_cast<int>(ErrorType::CommandLineArgumentsError);
 	}
 
 	hStdin = GetStdHandle(STD_INPUT_HANDLE);
 	if (hStdin == INVALID_HANDLE_VALUE)
 	{
-		// std::cerr << "GetStdHandle\n";
 		std::cerr << ErrorType::GetStdHandleError << '\n';
 		return static_cast<int>(ErrorType::GetStdHandleError);
 	}
@@ -297,7 +365,10 @@ int main(int argc, char *argv[])
 
 	if (argc == 2)
 	{
-		if (const ErrorType error = readFile(argv[1], buffer); error != ErrorType::None)
+		const std::string filename = argv[1];
+		const std::filesystem::path path = std::filesystem::current_path() / filename;
+
+		if (const ErrorType error = readFile(path, buffer); error != ErrorType::None)
 		{
 			std::cerr << error << '\n';
 			restoreConsole();
@@ -311,14 +382,14 @@ int main(int argc, char *argv[])
 	INPUT_RECORD inputRecord;
 	DWORD nrOfEventsRead;
 
-	int row = 0, col = 0;
+	int current_row = 0, current_col = 0;
 
 	while (true)
 	{
-		std::string &current_line = buffer.at(row);
+		std::string &current_line = buffer.at(current_row);
 
 		// Draw line
-		if (const ErrorType error = redrawLine(row, current_line, consoleWidth, col); error != ErrorType::None)
+		if (const ErrorType error = redrawLine(current_row, current_line, consoleWidth, current_col); error != ErrorType::None)
 		{
 			std::cerr << error << '\n';
 			restoreConsole();
@@ -343,85 +414,86 @@ int main(int argc, char *argv[])
 				break;
 			}
 
+			//TODO: better cursor movement
 			if (key_code == VK_UP)
 			{
-				if (row > 0)
+				if (current_row > 0)
 				{
-					--row;
-					col = static_cast<int>(buffer[row].length());
+					--current_row;
+					current_col = static_cast<int>(buffer[current_row].length());
 				}
 			}
 			else if (key_code == VK_DOWN)
 			{
-				if (row < buffer.size() - 1)
+				if (current_row < buffer.size() - 1)
 				{
-					++row;
-					col = static_cast<int>(buffer[row].length());
+					++current_row;
+					current_col = static_cast<int>(buffer[current_row].length());
 				}
 			}
 			else if (key_code == VK_LEFT)
 			{
-				if (col > 0)
+				if (current_col > 0)
 				{
-					--col;
+					--current_col;
 				}
 			}
 			else if (key_code == VK_RIGHT)
 			{
-				if (col < current_line.length())
+				if (current_col < current_line.length())
 				{
-					++col;
+					++current_col;
 				}
 			}
 			else if (key_code == VK_RETURN)
 			{
-				++row;
+				++current_row;
 
 				// If the cursor is in the middle of a line, split the line at the cursor position and move the text after the cursor to a new line below
-				if (col < current_line.length())
+				if (current_col < current_line.length())
 				{
-					const std::string firstPart = current_line.substr(0, col);
-					const std::string secondPart = current_line.substr(col);
+					const std::string firstPart = current_line.substr(0, current_col);
+					const std::string secondPart = current_line.substr(current_col);
 
-					buffer[row - 1] = firstPart;
-					buffer.insert(buffer.begin() + row, secondPart);
+					buffer[current_row - 1] = firstPart;
+					buffer.insert(buffer.begin() + current_row, secondPart);
 				}
 				else
 				{
-					if (row == buffer.size() - 1)
+					if (current_row == buffer.size() - 1)
 					{
 						buffer.emplace_back();
 					}
 					else
 					{
-						buffer.emplace(buffer.begin() + row);
+						buffer.emplace(buffer.begin() + current_row);
 					}
 				}
 
 				// Redraw modified lines
-				for (int i = row - 1; i < buffer.size(); ++i)
+				for (int i = current_row - 1; i < buffer.size(); ++i)
 				{
 					const auto &line = buffer[i];
 					redrawLine(i, line, consoleWidth);
 				}
 
-				col = 0;
+				current_col = 0;
 			}
 			else if (key_code == VK_BACK)
 			{
 				// If cursor is in the beginning of line, merge upper and current line and move the rest one line up
-				if (col == 0)
+				if (current_col == 0)
 				{
-					if (row > 0)
+					if (current_row > 0)
 					{
-						auto old_upper_line_length = buffer[row - 1].length();
-						buffer[row - 1] += current_line;
+						auto old_upper_line_length = buffer[current_row - 1].length();
+						buffer[current_row - 1] += current_line;
 
-						buffer.erase(buffer.begin() + row);
-						--row;
+						buffer.erase(buffer.begin() + current_row);
+						--current_row;
 
 						// Redraw lines after the deleted one
-						for (int i = row; i < buffer.size(); ++i)
+						for (int i = current_row; i < buffer.size(); ++i)
 						{
 							const auto &line = buffer[i];
 							redrawLine(i, line, consoleWidth);
@@ -431,36 +503,52 @@ int main(int argc, char *argv[])
 						clearLine(static_cast<int>(buffer.size() - 1), consoleWidth);
 
 						// Move the cursor to the end of upper line before merging
-						col = static_cast<int>(old_upper_line_length);
+						current_col = static_cast<int>(old_upper_line_length);
 					}
 				}
 				else
 				{
-					current_line.erase(col - 1, 1);
-					--col;
+					current_line.erase(current_col - 1, 1);
+					--current_col;
 				}
 			}
 			else if (key_code == VK_TAB)
 			{
 				// Insert 4 spaces
-				current_line.insert(col, "    ");
-				col += 4;
+				current_line.insert(current_col, "    ");
+				current_col += 4;
 
-				redrawLine(row, current_line, consoleWidth, col);
+				redrawLine(current_row, current_line, consoleWidth, current_col);
 			}
 			else if (printableKeyCodes.contains(key_code))
 			{
 				// Insert a new character after cursor
-				current_line.insert(col, 1, inputRecord.Event.KeyEvent.uChar.AsciiChar);
-				++col;
+				current_line.insert(current_col, 1, inputRecord.Event.KeyEvent.uChar.AsciiChar);
+				++current_col;
 			}
 		}
 	}
 
-	// If a file was opened, save the modified contents
-	if (argc == 2)
+	system("cls");
+	if (askForConfirmation("Save modified buffer?"))
 	{
-		if (const ErrorType error = saveFile(argv[1], buffer); error != ErrorType::None)
+		std::string filename;
+
+		// If a file was opened, save the modified contents
+		if (argc == 2)
+		{
+			filename = argv[1];
+		}
+		// else ask for a filename to write
+		else
+		{
+			std::cout << "Filename to write: ";
+			std::getline(std::cin, filename);
+		}
+
+		const std::filesystem::path path = std::filesystem::current_path() / filename;
+
+		if (const ErrorType error = saveFile(path, buffer); error != ErrorType::None)
 		{
 			std::cerr << error << '\n';
 			restoreConsole();
