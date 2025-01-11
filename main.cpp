@@ -1,3 +1,4 @@
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <unordered_set>
@@ -11,6 +12,8 @@ DWORD fdwSaveOldMode;
 enum class ErrorType
 {
 	None,
+	CommandLineArgumentsError,
+	FileOpenError,
 	GetConsoleModeError,
 	SetConsoleModeError,
 	SetConsoleCursorPositionError,
@@ -26,6 +29,8 @@ std::ostream &operator<<(std::ostream &os, const ErrorType errorType)
 	switch (errorType)
 	{
 		case ErrorType::None: return os << "No Error";
+		case ErrorType::CommandLineArgumentsError: return os << "CommandLineArgumentsError";
+		case ErrorType::FileOpenError: return os << "FileOpenError";
 		case ErrorType::GetConsoleModeError: return os << "GetConsoleMode";
 		case ErrorType::SetConsoleModeError: return os << "SetConsoleMode";
 		case ErrorType::SetConsoleCursorPositionError: return os << "SetConsoleCursorPosition";
@@ -215,8 +220,53 @@ const std::unordered_set printableKeyCodes = {
 	0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF
 };
 
-int main()
+ErrorType readFile(const std::string &path, std::vector<std::string> &buffer)
 {
+	std::ifstream inf{path};
+
+	if (!inf)
+	{
+		return ErrorType::FileOpenError;
+	}
+
+	std::vector<std::string> tmp_buffer;
+
+	std::string line;
+	while (std::getline(inf, line))
+	{
+		tmp_buffer.push_back(line);
+	}
+
+	buffer = tmp_buffer;
+
+	return ErrorType::None;
+}
+
+ErrorType saveFile(const std::string &path, const std::vector<std::string> &buffer)
+{
+	std::ofstream outf{path};
+
+	if (!outf)
+	{
+		return ErrorType::FileOpenError;
+	}
+
+	for (const auto& line : buffer)
+	{
+		outf << line << '\n';
+	}
+
+	return ErrorType::None;
+}
+
+int main(int argc, char *argv[])
+{
+	if (argc > 2)
+	{
+		std::cout << "Usage: " << argv[0] << " [path/to/file]\n";
+		return static_cast<int>(ErrorType::CommandLineArgumentsError);
+	}
+
 	hStdin = GetStdHandle(STD_INPUT_HANDLE);
 	if (hStdin == INVALID_HANDLE_VALUE)
 	{
@@ -243,14 +293,25 @@ int main()
 		return static_cast<int>(error);
 	}
 
-	// std::vector<std::string> buffer = {"Welcome to My Text Editor!", "Press ESC to exit."};
 	std::vector<std::string> buffer{1};
+
+	if (argc == 2)
+	{
+		if (const ErrorType error = readFile(argv[1], buffer); error != ErrorType::None)
+		{
+			std::cerr << error << '\n';
+			restoreConsole();
+			return static_cast<int>(error);
+		}
+
+		renderBuffer(buffer);
+	}
 
 	// Input loop
 	INPUT_RECORD inputRecord;
 	DWORD nrOfEventsRead;
 
-	int row = 0, col = 0, maxRow = 0;
+	int row = 0, col = 0;
 
 	while (true)
 	{
@@ -292,7 +353,7 @@ int main()
 			}
 			else if (key_code == VK_DOWN)
 			{
-				if (row < maxRow)
+				if (row < buffer.size() - 1)
 				{
 					++row;
 					col = static_cast<int>(buffer[row].length());
@@ -315,7 +376,6 @@ int main()
 			else if (key_code == VK_RETURN)
 			{
 				++row;
-				++maxRow;
 
 				// If the cursor is in the middle of a line, split the line at the cursor position and move the text after the cursor to a new line below
 				if (col < current_line.length())
@@ -328,7 +388,7 @@ int main()
 				}
 				else
 				{
-					if (row == maxRow)
+					if (row == buffer.size() - 1)
 					{
 						buffer.emplace_back();
 					}
@@ -339,7 +399,7 @@ int main()
 				}
 
 				// Redraw modified lines
-				for (int i = row - 1; i <= maxRow; ++i)
+				for (int i = row - 1; i < buffer.size(); ++i)
 				{
 					const auto &line = buffer[i];
 					redrawLine(i, line, consoleWidth);
@@ -359,17 +419,16 @@ int main()
 
 						buffer.erase(buffer.begin() + row);
 						--row;
-						--maxRow;
 
 						// Redraw lines after the deleted one
-						for (int i = row; i <= maxRow; ++i)
+						for (int i = row; i < buffer.size(); ++i)
 						{
 							const auto &line = buffer[i];
 							redrawLine(i, line, consoleWidth);
 						}
 
 						// and clear the last one
-						clearLine(maxRow + 1, consoleWidth);
+						clearLine(static_cast<int>(buffer.size() - 1), consoleWidth);
 
 						// Move the cursor to the end of upper line before merging
 						col = static_cast<int>(old_upper_line_length);
@@ -385,8 +444,6 @@ int main()
 			{
 				// Insert 4 spaces
 				current_line.insert(col, "    ");
-
-
 				col += 4;
 
 				redrawLine(row, current_line, consoleWidth, col);
@@ -394,10 +451,20 @@ int main()
 			else if (printableKeyCodes.contains(key_code))
 			{
 				// Insert a new character after cursor
-				// current_line += inputRecord.Event.KeyEvent.uChar.AsciiChar;
 				current_line.insert(col, 1, inputRecord.Event.KeyEvent.uChar.AsciiChar);
 				++col;
 			}
+		}
+	}
+
+	// If a file was opened, save the modified contents
+	if (argc == 2)
+	{
+		if (const ErrorType error = saveFile(argv[1], buffer); error != ErrorType::None)
+		{
+			std::cerr << error << '\n';
+			restoreConsole();
+			return static_cast<int>(error);
 		}
 	}
 
